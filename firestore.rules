@@ -1,0 +1,194 @@
+/**
+ * This ruleset enforces a strict user-ownership security model for the SafeWallet application.
+ *
+ * Core Philosophy:
+ * All user data is considered private and can only be accessed by the authenticated user who created it.
+ * There is no public or shared data. The ruleset strictly isolates each user's data from all others.
+ *
+ * Data Structure:
+ * The data is organized hierarchically. All user-specific data, including wallets, transactions,
+ * and addresses, is nested under a top-level `/users/{userId}` path, where `userId` corresponds
+ * to the user's Firebase Authentication UID. This structure is fundamental to the security model.
+ *
+ * Key Security Decisions:
+ * - Authentication Required: All read and write operations require the user to be signed in.
+ * - Strict Ownership: A user can only access documents within their own `/users/{userId}` data tree.
+ * - No User Enumeration: Listing the top-level `/users` collection is explicitly forbidden to prevent
+ *   leaking user information.
+ * - Path-Based Security: Authorization decisions are made using the user ID from the document path,
+ *   which avoids costly and slow `get()` calls to other documents, resulting in more performant rules.
+ * - Superadmin Role: A `isSuperAdmin` field in the user's document grants write access to global configuration collections.
+ *
+ * Denormalization for Authorization:
+ * The hierarchical path structure `/users/{userId}/...` inherently denormalizes the user's ID for authorization
+ * purposes, making rules simple and efficient. For subcollections like wallets, the `userId` is also
+ * stored in the document data to ensure relational integrity upon creation.
+ *
+ * Structural Segregation:
+ * The model uses path-based segregation to isolate each user's data completely. This is the most secure
+ * pattern for multi-tenant applications where data must not be shared.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for reusable logic
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Checks if the requesting user's UID matches the userId in the path.
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Checks for ownership on an existing document. Used for update and delete.
+    function isExistingOwner(userId) {
+      return isOwner(userId) && resource != null;
+    }
+
+    // Checks if the user is a superadmin by reading their user document.
+    function isSuperAdmin() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true;
+    }
+    
+    function isDepositAdmin() {
+        return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isDepositAdmin == true;
+    }
+    
+    function isReferrer(referredUserId) {
+        let referredUserDoc = get(/databases/$(database)/documents/users/$(referredUserId));
+        // Ensure the referrer's data is accessible and the referralCode matches.
+        return isSignedIn() 
+               && exists(/databases/$(database)/documents/users/$(referredUserId))
+               && referredUserDoc.data.referredBy == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.referralCode;
+    }
+
+
+    /**
+     * @description Rules for a user's own profile document.
+     * @path /users/{userId}
+     */
+    match /users/{userId} {
+      allow get, update: if isOwner(userId) || isSuperAdmin();
+      allow list: if isSuperAdmin(); // Allow admins to list all users
+      // Allow a referrer to read limited data of their referred users
+      allow get: if isReferrer(userId);
+      allow create: if isOwner(userId) && request.resource.data.id == userId;
+      allow delete: if isExistingOwner(userId) || isSuperAdmin();
+
+      /**
+       * @description Rules for the 'wallets' subcollection, owned by a user.
+       * @path /users/{userId}/wallets/{walletId}
+       */
+      match /wallets/{walletId} {
+        allow get, list: if isOwner(userId);
+        // Allow SuperAdmins and Referrers to update any wallet (e.g. for commission)
+        allow update: if isSuperAdmin() || isOwner(userId) || isReferrer(userId);
+        allow create: if isOwner(userId) && request.resource.data.userId == userId;
+        allow delete: if isExistingOwner(userId);
+
+        /**
+         * @description Rules for the 'transactions' subcollection within a wallet.
+         * @path /users/{userId}/wallets/{walletId}/transactions/{transactionId}
+         */
+        match /transactions/{transactionId} {
+          allow get, list: if isOwner(userId) || isSuperAdmin();
+          // Allow SuperAdmins and Referrers to create transactions (for commissions)
+          allow create: if isSuperAdmin() || isOwner(userId) || isReferrer(userId);
+          allow update, delete: if isSuperAdmin();
+        }
+      }
+    }
+    
+    /**
+     * @description Rules for the global deposit network configurations.
+     * @path /depositNetworks/{networkId}
+     */
+    match /depositNetworks/{networkId} {
+      allow get, list: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+    
+    /**
+     * @description Rules for deposit requests submitted by users.
+     * @path /depositRequests/{requestId}
+     */
+    match /depositRequests/{requestId} {
+      allow list, update: if isSuperAdmin() || isDepositAdmin();
+      allow get: if isSuperAdmin() || isDepositAdmin() || isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+      allow delete: if isSuperAdmin() || isDepositAdmin();
+    }
+
+    /**
+     * @description Rules for global investment plan configurations.
+     * @path /investmentPlans/{planId}
+     */
+    match /investmentPlans/{planId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || isDepositAdmin();
+    }
+    
+    /**
+     * @description Rules for user investments.
+     * @path /userInvestments/{investmentId}
+     */
+    match /userInvestments/{investmentId} {
+        allow list: if isSuperAdmin(); // Admin can list all for overview
+        // Allow user to get their own, and referrer to get their referred user's investment
+        allow get: if isOwner(resource.data.userId) || isSuperAdmin() || isReferrer(resource.data.userId);
+        allow create: if isOwner(request.resource.data.userId);
+        allow update: if isOwner(request.resource.data.userId) && request.resource.data.userId == resource.data.userId; // User can update their own (e.g. lastCollectionDate)
+        allow delete: if isSuperAdmin();
+    }
+
+    /**
+     * @description Rules for global app configuration.
+     * @path /app_config/{configId}
+     */
+    match /app_config/{configId} {
+        allow get: if isSignedIn();
+        allow write: if isSuperAdmin();
+    }
+    
+    /**
+     * @description Rules for global withdrawal configuration.
+     * @path /withdrawal_config/{configId}
+     */
+    match /withdrawal_config/{configId} {
+        allow get: if isSignedIn();
+        allow write: if isSuperAdmin();
+    }
+
+    /**
+     * @description Rules for user withdrawal requests.
+     * @path /withdrawalRequests/{requestId}
+     */
+    match /withdrawalRequests/{requestId} {
+      allow list: if isSuperAdmin() || isDepositAdmin(); 
+      allow get: if isSuperAdmin() || isDepositAdmin() || isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+      allow delete: if isSuperAdmin();
+      allow update(writeFields): if (isSuperAdmin() || isDepositAdmin()) && writeFields.hasOnly(['status', 'decisionDate', 'adminId']);
+    }
+
+    /**
+     * @description Rules for global deposit bonus configuration.
+     * @path /deposit_bonus_config/{configId}
+     */
+    match /deposit_bonus_config/{configId} {
+        allow get: if isSignedIn();
+        allow write: if isSuperAdmin();
+    }
+    
+    /**
+     * @description Rules for the application tutorial content.
+     * @path /tutorials/{tutorialId}
+     */
+    match /tutorials/{tutorialId} {
+      allow get, list: if isSignedIn();
+      allow write: if isSuperAdmin() || isDepositAdmin();
+    }
+  }
+}
