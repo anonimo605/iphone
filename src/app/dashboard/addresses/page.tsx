@@ -69,6 +69,7 @@ import type {
   UserProfile,
   WithdrawalConfig,
   WithdrawalRequest,
+  UserInvestment,
 } from '@/lib/types';
 import { format } from 'date-fns';
 
@@ -258,6 +259,13 @@ function WithdrawalRequestForm({
   const { data: wallets } = useCollection(walletsQuery);
   const mainWallet = wallets?.[0];
 
+  const activeInvestmentsQuery = useMemoFirebase(
+    () => (user ? query(collection(firestore, 'userInvestments'), where('userId', '==', user.uid), where('isActive', '==', true)) : null),
+    [firestore, user]
+  );
+  const { data: activeInvestments, isLoading: isLoadingInvestments } = useCollection<UserInvestment>(activeInvestmentsQuery);
+
+
   // --- Calculation Logic ---
   const totalAmountInCop = parseFloat(amount) || 0;
   const feeInCop = totalAmountInCop * config.feePercentage;
@@ -266,6 +274,17 @@ function WithdrawalRequestForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const method = 'Nequi';
+
+    if (!activeInvestments || activeInvestments.length === 0) {
+        toast({
+            variant: 'destructive',
+            title: 'Retiro no permitido',
+            description: 'Debes tener al menos un plan de inversión activo para poder retirar fondos.',
+        });
+        return;
+    }
+
+
     if (!user || !firestore || !mainWallet || totalAmountInCop <= 0) {
       toast({
         variant: 'destructive',
@@ -404,6 +423,8 @@ function WithdrawalRequestForm({
   const balanceToShow = formatCurrency(mainWallet?.balance || 0);
 
   const minWithdrawalDisplay = formatCurrency(config.minWithdrawal);
+  
+  const canWithdraw = !isLoadingInvestments && activeInvestments && activeInvestments.length > 0;
 
   return (
     <Card>
@@ -416,56 +437,67 @@ function WithdrawalRequestForm({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="amount-nequi">
-              Monto a Retirar (COP)
-            </Label>
-            <Input
-              id="amount-nequi"
-              type="number"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder={`Mínimo ${minWithdrawalDisplay}`}
-            />
-          </div>
-          {totalAmountInCop > 0 && (
-            <div className="p-3 bg-muted rounded-md text-sm space-y-2">
-              <div className="flex justify-between">
-                <span>Monto Solicitado:</span>
-                <span>
-                  {formatCurrency(totalAmountInCop)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span>Comisión ({config.feePercentage * 100}%):</span>
-                <span>- {formatCurrency(feeInCop)}</span>
-              </div>
-              <div className="flex justify-between font-bold">
-                <span>Total a Recibir:</span>
-                <span>
-                  {formatCurrency(netAmountInCop)}
-                </span>
-              </div>
+        {isLoadingInvestments ? (
+             <div className="flex items-center justify-center p-4 bg-muted rounded-md text-sm">
+                <Loader2 className="mr-2 animate-spin" /> Verificando estado de inversiones...
+             </div>
+        ) : canWithdraw ? (
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                    <Label htmlFor="amount-nequi">
+                    Monto a Retirar (COP)
+                    </Label>
+                    <Input
+                    id="amount-nequi"
+                    type="number"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder={`Mínimo ${minWithdrawalDisplay}`}
+                    />
+                </div>
+                {totalAmountInCop > 0 && (
+                    <div className="p-3 bg-muted rounded-md text-sm space-y-2">
+                    <div className="flex justify-between">
+                        <span>Monto Solicitado:</span>
+                        <span>
+                        {formatCurrency(totalAmountInCop)}
+                        </span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span>Comisión ({config.feePercentage * 100}%):</span>
+                        <span>- {formatCurrency(feeInCop)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                        <span>Total a Recibir:</span>
+                        <span>
+                        {formatCurrency(netAmountInCop)}
+                        </span>
+                    </div>
+                    </div>
+                )}
+                <Button
+                    type="submit"
+                    className="w-full"
+                    disabled={
+                    isLoading ||
+                    !amount ||
+                    !userProfile.withdrawalNequi
+                    }
+                >
+                    {isLoading ? (
+                    <Loader2 className="mr-2 animate-spin" />
+                    ) : (
+                    <Send className="mr-2" />
+                    )}
+                    Solicitar Retiro
+                </Button>
+            </form>
+        ) : (
+             <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-center text-sm flex items-center gap-2 justify-center">
+                <Info className="h-4 w-4 flex-shrink-0" />
+                <span className='text-left'>Debes tener al menos un plan de inversión activo para poder retirar fondos.</span>
             </div>
-          )}
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={
-              isLoading ||
-              !amount ||
-              !userProfile.withdrawalNequi
-            }
-          >
-            {isLoading ? (
-              <Loader2 className="mr-2 animate-spin" />
-            ) : (
-              <Send className="mr-2" />
-            )}
-            Solicitar Retiro
-          </Button>
-        </form>
+        )}
       </CardContent>
     </Card>
   );
