@@ -789,6 +789,9 @@ const ConfigTab = () => {
     // Predefined Deposit Amounts
     const [predefinedAmounts, setPredefinedAmounts] = useState<string[]>(Array(6).fill(''));
 
+    // Registration Bonus
+    const [registrationBonus, setRegistrationBonus] = useState('');
+    const [registrationBonusEnabled, setRegistrationBonusEnabled] = useState(false);
 
     useEffect(() => {
         if (appConfig) {
@@ -803,6 +806,8 @@ const ConfigTab = () => {
             setEarningsCommissionEnabled(appConfig.earningsClaimCommissionEnabled || false);
             const amounts = appConfig.predefinedDepositAmounts || [];
             setPredefinedAmounts(Array.from({ length: 6 }, (_, i) => amounts[i]?.toString() || ''));
+            setRegistrationBonus(appConfig.registrationBonus?.toString() || '');
+            setRegistrationBonusEnabled(appConfig.registrationBonusEnabled || false);
         }
     }, [appConfig]);
 
@@ -859,6 +864,7 @@ const ConfigTab = () => {
                 announcement_enabled: announcementEnabled,
                 earningsClaimCommissionEnabled: earningsCommissionEnabled,
                 predefinedDepositAmounts: predefinedAmounts.map(a => parseFloat(a)).filter(a => !isNaN(a) && a > 0),
+                registrationBonusEnabled: registrationBonusEnabled,
             };
             
             const rate = parseFloat(exchangeRate);
@@ -869,6 +875,9 @@ const ConfigTab = () => {
 
             const earnCommission = parseFloat(earningsCommission);
             if(!isNaN(earnCommission) && earnCommission >= 0) newConfig.earningsClaimCommissionPercentage = earnCommission;
+
+            const regBonus = parseFloat(registrationBonus);
+            if(!isNaN(regBonus) && regBonus >= 0) newConfig.registrationBonus = regBonus;
 
             await setDoc(doc(firestore, 'app_config', 'main'), newConfig, { merge: true });
             toast({ title: "Éxito", description: "La configuración general ha sido actualizada." });
@@ -961,6 +970,26 @@ const ConfigTab = () => {
 
     return (
         <div className="space-y-8">
+             <Card>
+                <CardHeader>
+                    <CardTitle className='flex items-center gap-2'><Gift /> Bono de Registro</CardTitle>
+                    <CardDescription>Otorga un saldo inicial a los nuevos usuarios al registrarse.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    <div className="space-y-2">
+                        <Label htmlFor="registration-bonus">Monto del Bono (COP)</Label>
+                        <Input id="registration-bonus" type="number" value={registrationBonus} onChange={(e) => setRegistrationBonus(e.target.value)} placeholder="Ej: 5000" disabled={isSavingAppConfig}/>
+                    </div>
+                     <div className="flex items-center space-x-2">
+                        <Switch id="registration-bonus-enabled" checked={registrationBonusEnabled} onCheckedChange={setRegistrationBonusEnabled} disabled={isSavingAppConfig} />
+                        <Label htmlFor="registration-bonus-enabled">Activar bono de registro</Label>
+                    </div>
+                     <Button onClick={handleSaveAppConfig} disabled={isSavingAppConfig}>
+                        <Save className="mr-2 h-4 w-4" />
+                        {isSavingAppConfig ? "Guardando..." : "Guardar Bono de Registro"}
+                     </Button>
+                </CardContent>
+            </Card>
             <Card>
                 <CardHeader>
                     <CardTitle className='flex items-center gap-2'><Gift /> Bonificación por Depósito</CardTitle>
