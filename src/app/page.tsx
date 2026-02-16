@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth, useFirestore } from "@/firebase";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, getDoc, writeBatch, collection } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { generateReferralCodeFromUID } from "@/lib/referral";
 import type { AppConfig } from '@/lib/types';
@@ -50,11 +50,22 @@ function AuthPageContent() {
       return;
     }
     try {
+      const configDocRef = doc(firestore, 'app_config', 'main');
+      const configSnap = await getDoc(configDocRef);
+      const appConfig = configSnap.exists() ? configSnap.data() as AppConfig : null;
+
+      let initialBalance = 0;
+      if (appConfig?.registrationBonusEnabled && appConfig.registrationBonus && appConfig.registrationBonus > 0) {
+        initialBalance = appConfig.registrationBonus;
+      }
+
       const email = formatEmailFromPhone(phoneNumber);
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
       const ownReferralCode = generateReferralCodeFromUID(user.uid);
+      
+      const batch = writeBatch(firestore);
 
       const userDocRef = doc(firestore, "users", user.uid);
       const userData = {
@@ -66,10 +77,10 @@ function AuthPageContent() {
         isSuperAdmin: false,
         referralCode: ownReferralCode,
         referredBy: referralCode || null,
-        balance: 0,
+        balance: initialBalance,
         hasInvested: false,
       };
-      await setDoc(userDocRef, userData);
+      batch.set(userDocRef, userData);
 
       const walletId = doc(doc(firestore, 'users', user.uid), 'wallets', 'main').id;
       const walletDocRef = doc(firestore, `users/${user.uid}/wallets`, walletId);
@@ -77,10 +88,25 @@ function AuthPageContent() {
         id: walletId,
         userId: user.uid,
         name: "Billetera Principal",
-        balance: 0, 
+        balance: initialBalance, 
         creationDate: new Date().toISOString(),
       };
-      await setDoc(walletDocRef, walletData);
+      batch.set(walletDocRef, walletData);
+
+      if (initialBalance > 0) {
+        const transactionRef = doc(collection(firestore, `users/${user.uid}/wallets/${walletId}/transactions`));
+        batch.set(transactionRef, {
+            id: transactionRef.id,
+            walletId: walletId,
+            transactionDate: new Date().toISOString(),
+            amount: initialBalance,
+            description: `Bono de registro`,
+            type: 'deposit-bonus',
+            status: 'completed'
+        });
+      }
+
+      await batch.commit();
 
       router.push("/dashboard");
     } catch (error: any) {
