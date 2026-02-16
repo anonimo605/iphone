@@ -104,6 +104,8 @@ export type AppConfig = {
     earningsClaimCommissionPercentage?: number;
     earningsClaimCommissionEnabled?: boolean;
     predefinedDepositAmounts?: number[];
+    registrationBonus?: number;
+    registrationBonusEnabled?: boolean;
 };
 
 export interface DepositBonusConfig {
